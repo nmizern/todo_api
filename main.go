@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 )
 
 type TODO struct {
@@ -13,38 +14,49 @@ type TODO struct {
 	Done bool   `json:"done"`
 }
 
-var tasks = make([]TODO, 0)
-
-func getTodos(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "appliction/json")
-	json.NewEncoder(w).Encode(tasks)
+type TasksManager struct {
+	mu    sync.Mutex
+	tasks []TODO
 }
 
-func createTodo(w http.ResponseWriter, r *http.Request) {
+func (tm *TasksManager) getTodos(w http.ResponseWriter, r *http.Request) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	w.Header().Set("Content-Type", "appliction/json")
+	json.NewEncoder(w).Encode(tm.tasks)
+}
+
+func (tm *TasksManager) createTodo(w http.ResponseWriter, r *http.Request) {
 	var newTodo TODO
 	json.NewDecoder(r.Body).Decode(&newTodo)
-	newTodo.ID = len(tasks) + 1
-	tasks = append(tasks, newTodo)
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	newTodo.ID = len(tm.tasks) + 1
+	tm.tasks = append(tm.tasks, newTodo)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(newTodo)
 }
 
-func updateTodo(w http.ResponseWriter, r *http.Request) {
+func (tm *TasksManager) updateTodo(w http.ResponseWriter, r *http.Request) {
 	idStr := r.URL.Path[len("/todos/"):]
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
 	}
 
 	var updateTodo TODO
 	json.NewDecoder(r.Body).Decode(&updateTodo)
 
-	for i, todo := range tasks {
+	for i, todo := range tm.tasks {
 		if todo.ID == id {
-			tasks[i].Name = updateTodo.Name
-			tasks[i].Done = updateTodo.Done
-			json.NewEncoder(w).Encode(tasks[i])
+			tm.tasks[i].Name = updateTodo.Name
+			tm.tasks[i].Done = updateTodo.Done
+			json.NewEncoder(w).Encode(tm.tasks[i])
 
 			return
 		}
@@ -53,7 +65,7 @@ func updateTodo(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Task ID not found", http.StatusNotFound)
 }
 
-func deleteTodo(w http.ResponseWriter, r *http.Request) {
+func (tm *TasksManager) deleteTodo(w http.ResponseWriter, r *http.Request) {
 	idStr := r.URL.Path[len("/todos/"):]
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -61,9 +73,9 @@ func deleteTodo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for i, todo := range tasks {
+	for i, todo := range tm.tasks {
 		if todo.ID == id {
-			tasks = append(tasks[:i], tasks[:i+1]...)
+			tm.tasks = append(tm.tasks[:i], tm.tasks[:i+1]...)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -73,23 +85,27 @@ func deleteTodo(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
+	tasksManager := &TasksManager{
+		tasks: make([]TODO, 0),
+	}
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Welcome to the TODO API"))
 	})
 
 	http.HandleFunc("/todos/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "PUT" {
-			updateTodo(w, r)
+			tasksManager.updateTodo(w, r)
 		} else if r.Method == "DELETE" {
-			deleteTodo(w, r)
+			tasksManager.deleteTodo(w, r)
 		}
 	})
 
 	http.HandleFunc("/todos", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			getTodos(w, r)
+			tasksManager.getTodos(w, r)
 		} else if r.Method == "POST" {
-			createTodo(w, r)
+			tasksManager.createTodo(w, r)
 		}
 	})
 
